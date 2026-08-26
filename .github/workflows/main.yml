@@ -6,17 +6,19 @@ jobs:
   launch-terminal:
     runs-on: macos-latest
     steps:
-      # Step 1: Install and launch tmate manually in the background
+      # Step 1: Use the official tmate action but set it to continue on error 
+      # so it passes the link to the next step before pausing
       - name: Initialize Connection
-        run: |
-          brew install tmate
-          tmate -F &
-          sleep 5
+        uses: mxschmitt/action-tmate@v3
+        continue-on-error: true
+        with:
+          detached: true # Tells the server to run cleanly in the background
 
       # Step 2: Extract the link and push it cleanly to the GitHub Summary Page
       - name: Display Web Link
         run: |
-          # Grabs the browser URL string from the active system session
+          sleep 5
+          # Grabs the browser URL string from the active background socket
           WEB_URL=$(tmate -S /tmp/tmate.sock display -p '#{tmate_web}')
           
           echo "### 🚀 CLOUD MAC TERMINAL READY" >> $GITHUB_STEP_SUMMARY
