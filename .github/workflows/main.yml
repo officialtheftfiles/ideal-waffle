@@ -6,26 +6,38 @@ jobs:
   launch-terminal:
     runs-on: macos-latest
     steps:
-      # Step 1: Use the official tmate action but set it to continue on error 
-      # so it passes the link to the next step before pausing
-      - name: Initialize Connection
-        uses: mxschmitt/action-tmate@v3
-        continue-on-error: true
-        with:
-          detached: true # Tells the server to run cleanly in the background
-
-      # Step 2: Extract the link and push it cleanly to the GitHub Summary Page
-      - name: Display Web Link
+      # Step 1: Install and configure Ngrok using the secret you saved earlier
+      - name: Initialize Tunnel
         run: |
-          sleep 5
-          # Grabs the browser URL string from the active background socket
-          WEB_URL=$(tmate -S /tmp/tmate.sock display -p '#{tmate_web}')
-          
-          echo "### 🚀 CLOUD MAC TERMINAL READY" >> $GITHUB_STEP_SUMMARY
-          echo "Click the link below to open your free macOS instance directly in your browser:" >> $GITHUB_STEP_SUMMARY
-          echo "#### [👉 OPEN MAC TERMINAL IN BROWSER]($WEB_URL)" >> $GITHUB_STEP_SUMMARY
+          brew install ngrok
+          ngrok config add-authtoken "${{ secrets.NGROK_AUTH_TOKEN }}"
 
-      # Step 3: Keep the server awake for 6 hours
+      # Step 2: Launch the web-accessible terminal panel
+      - name: Open Web Terminal
+        run: |
+          # Starts a lightweight web terminal engine on port 4242
+          sudo native-terminal-server --port 4242 &
+          sleep 5
+          
+          # Fire up the Ngrok tunnel over HTTP
+          ngrok http 4242 --log=stdout &
+          sleep 10
+
+      # Step 3: Automatically post the link as a comment notification
+      - name: Post Access URL
+        run: |
+          # Fetch the public link from Ngrok's local API panel
+          TERMINAL_URL=$(curl --silent http://127.0.0 | jq -r '.tunnels[0].public_url')
+          
+          # Post the link as a direct comment on the workflow run page
+          curl -L \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            https://github.com{{ github.repository }}/actions/runs/${{ github.run_id }}/comments \
+            -d "{\"body\":\"🚀 YOUR CLOUD MAC TERMINAL IS READY!\n\nClick here to open it: $TERMINAL_URL\"}"
+
+      # Step 4: Keep the server open for 6 hours
       - name: Hold Session Open
         run: |
           sleep 21600
