@@ -16,13 +16,12 @@ jobs:
         run: |
           sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist
 
-      # Step 3: Run Pinggy to generate a free TCP address without signing up
+      # Step 3: Force Pinggy to create a clean TCP port address
       - name: Start Live GUI Stream
         run: |
           echo "=========================================================="
           echo "Generating your visual desktop connection details..."
           echo "=========================================================="
           
-          # Starts a secure tunnel mapping the Mac screen stream (Port 5900)
-          ssh -p 443 -R0:localhost:5900 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 a.pinggy.io
-          
+          # Added "tcp" at the end to force raw numeric port output
+          ssh -p 443 -R0:localhost:5900 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 tcp@a.pinggy.io
