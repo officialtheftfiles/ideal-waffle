@@ -1,39 +1,10 @@
-name: Free Web-Browser Mac GUI
+name: Free Mac Terminal Cloud
 on: 
   workflow_dispatch: 
 
 jobs:
-  launch-gui:
+  launch-terminal:
     runs-on: macos-latest
     steps:
-      # Step 1: Assign user authorization privileges locally 
-      - name: Configure Mac User Password
-        run: |
-          sudo sysadminctl -passwordSecure "password123" -addUserPassword runner
-
-      # Step 2: Configure ARD and set an explicit VNC legacy password
-      - name: Configure Global VNC Authentication
-        run: |
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -activate -configure -access -on \
-            -privs -all -users runner
-          
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -configure -clientopts -setvncpasswd -vncpasswd "password123"
-
-      # Step 3: Install and start noVNC (Translates VNC into a web server)
-      - name: Launch Web GUI Proxy
-        run: |
-          brew install novnc
-          # Starts noVNC on port 8080 pointing to the Mac's VNC screen on port 5900
-          novnc --vnc localhost:5900 --listen localhost:8080 &
-
-      # Step 4: Expose Port 8080 over Pinggy as a standard Web Link
-      - name: Start Live Web Stream
-        run: |
-          echo "=========================================================="
-          echo "Generating your visual Web-Browser desktop link..."
-          echo "=========================================================="
-          
-          # Notice we route port 8080 here instead of 5900 so it acts like a website
-          ssh -p 443 -R0:localhost:8080 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 a.pinggy.io
+      - name: Open Direct Web Browser Terminal
+        uses: mxschmitt/action-tmate@v3
