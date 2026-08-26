@@ -11,23 +11,21 @@ jobs:
         run: |
           sudo sysadminctl -passwordSecure "password123" -addUserPassword runner
 
-      # Step 2: Grant the runner profile explicit VNC access permissions
-      - name: Authorize Remote Desktop Access
+      # Step 2: Force global VNC password validation and disable Apple-only encryption checks
+      - name: Configure Global VNC Authentication
         run: |
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
             -activate -configure -access -on \
             -privs -all -users runner
+          
+          # Force macOS to accept standard VNC viewers with a hash password
+          sudo /usr/libexec/PlistBuddy -c "Set :VNCPassword (hash) 02 13 45 61 c4 6f 11 02" /Library/Preferences/com.apple.RemoteManagement.plist
+          sudo /usr/libexec/PlistBuddy -c "Set :ShareWithVNCPassword 1" /Library/Preferences/com.apple.RemoteManagement.plist
 
-      # Step 3: Turn on the native Apple Graphical VNC Engine
-      - name: Activate Apple VNC Server
-        run: |
-          sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist
-
-      # Step 4: Force Pinggy to create a clean TCP port address
+      # Step 3: Start the TCP Tunnel 
       - name: Start Live GUI Stream
         run: |
           echo "=========================================================="
           echo "Generating your visual desktop connection details..."
           echo "=========================================================="
-          
           ssh -p 443 -R0:localhost:5900 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 tcp@a.pinggy.io
