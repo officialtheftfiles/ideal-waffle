@@ -1,34 +1,28 @@
-name: Free macOS Cloud Runner
+name: Zero Setup Free Mac GUI
 on: 
-  workflow_dispatch: # Allows you to trigger this machine manually with a button
+  workflow_dispatch: 
 
 jobs:
-  launch-mac:
+  launch-gui:
     runs-on: macos-latest
     steps:
-      # Step 1: Securely connect the Mac to your Tailnet using your saved GitHub Secret
-      - name: Connect Tailscale
-        uses: tailscale/github-action@v4
-        with:
-          authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
-
-      # Step 2: Establish the login password for the Mac user account
+      # Step 1: Assign user authorization privileges locally 
       - name: Configure Mac User Password
         run: |
-          sudo dscl . -passwd /Users/runner "password123"
+          sudo sysadminctl -passwordSecure "password123" -addUserPassword runner
 
-      # Step 3: Turn on the native Apple Screen Sharing engine
-      - name: Activate Apple Screen Sharing
+      # Step 2: Turn on the native Apple Graphical VNC Engine
+      - name: Activate Apple VNC Server
         run: |
           sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist
 
-      # Step 4: Prevent the workflow from closing instantly (Keeps it running for 6 hours)
-      - name: Maintain Active Session
+      # Step 3: Run Pinggy to generate a free TCP address without signing up
+      - name: Start Live GUI Stream
         run: |
           echo "=========================================================="
-          echo "SUCCESS: Your Mac cloud node is connected to Tailscale!"
-          echo "Look for a machine named 'github-' in your Tailscale app."
-          echo "Log in with Username: runner | Password: password123"
+          echo "Generating your visual desktop connection details..."
           echo "=========================================================="
-          sleep 21600
+          
+          # Starts a secure tunnel mapping the Mac screen stream (Port 5900)
+          ssh -p 443 -R0:localhost:5900 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 a.pinggy.io
           
