@@ -6,5 +6,24 @@ jobs:
   launch-terminal:
     runs-on: macos-latest
     steps:
-      - name: Open Direct Web Browser Terminal
-        uses: mxschmitt/action-tmate@v3
+      # Step 1: Install and launch tmate manually in the background
+      - name: Initialize Connection
+        run: |
+          brew install tmate
+          tmate -F &
+          sleep 5
+
+      # Step 2: Extract the link and push it cleanly to the GitHub Summary Page
+      - name: Display Web Link
+        run: |
+          # Grabs the browser URL string from the active system session
+          WEB_URL=$(tmate -S /tmp/tmate.sock display -p '#{tmate_web}')
+          
+          echo "### 🚀 CLOUD MAC TERMINAL READY" >> $GITHUB_STEP_SUMMARY
+          echo "Click the link below to open your free macOS instance directly in your browser:" >> $GITHUB_STEP_SUMMARY
+          echo "#### [👉 OPEN MAC TERMINAL IN BROWSER]($WEB_URL)" >> $GITHUB_STEP_SUMMARY
+
+      # Step 3: Keep the server awake for 6 hours
+      - name: Hold Session Open
+        run: |
+          sleep 21600
