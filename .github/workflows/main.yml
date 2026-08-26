@@ -1,0 +1,34 @@
+name: Free macOS Cloud Runner
+on: 
+  workflow_dispatch: # Allows you to trigger this machine manually with a button
+
+jobs:
+  launch-mac:
+    runs-on: macos-latest
+    steps:
+      # Step 1: Securely connect the Mac to your Tailnet using your saved GitHub Secret
+      - name: Connect Tailscale
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
+
+      # Step 2: Establish the login password for the Mac user account
+      - name: Configure Mac User Password
+        run: |
+          sudo dscl . -passwd /Users/runner "password123"
+
+      # Step 3: Turn on the native Apple Screen Sharing engine
+      - name: Activate Apple Screen Sharing
+        run: |
+          sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist
+
+      # Step 4: Prevent the workflow from closing instantly (Keeps it running for 6 hours)
+      - name: Maintain Active Session
+        run: |
+          echo "=========================================================="
+          echo "SUCCESS: Your Mac cloud node is connected to Tailscale!"
+          echo "Look for a machine named 'github-' in your Tailscale app."
+          echo "Log in with Username: runner | Password: password123"
+          echo "=========================================================="
+          sleep 21600
+          
