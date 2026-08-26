@@ -11,16 +11,21 @@ jobs:
         run: |
           sudo sysadminctl -passwordSecure "password123" -addUserPassword runner
 
-      # Step 2: Force global VNC password validation and disable Apple-only encryption checks
+      # Step 2: Configure ARD and set an explicit VNC legacy password
       - name: Configure Global VNC Authentication
         run: |
+          # 1. Activate Remote Management for the runner profile
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
             -activate -configure -access -on \
             -privs -all -users runner
           
-          # Force macOS to accept standard VNC viewers with a hash password
-          sudo /usr/libexec/PlistBuddy -c "Set :VNCPassword (hash) 02 13 45 61 c4 6f 11 02" /Library/Preferences/com.apple.RemoteManagement.plist
-          sudo /usr/libexec/PlistBuddy -c "Set :ShareWithVNCPassword 1" /Library/Preferences/com.apple.RemoteManagement.plist
+          # 2. Inject a direct VNC-compatible password bypass into the system preferences
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+            -configure -clientopts -setvncpasswd -vncpasswd "password123"
+          
+          # 3. Force the connection server agent to restart and apply changes cleanly
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+            -restart -agent
 
       # Step 3: Start the TCP Tunnel 
       - name: Start Live GUI Stream
