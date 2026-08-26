@@ -11,17 +11,23 @@ jobs:
         run: |
           sudo sysadminctl -passwordSecure "password123" -addUserPassword runner
 
-      # Step 2: Turn on the native Apple Graphical VNC Engine
+      # Step 2: Grant the runner profile explicit VNC access permissions
+      - name: Authorize Remote Desktop Access
+        run: |
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+            -activate -configure -access -on \
+            -privs -all -users runner
+
+      # Step 3: Turn on the native Apple Graphical VNC Engine
       - name: Activate Apple VNC Server
         run: |
           sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist
 
-      # Step 3: Force Pinggy to create a clean TCP port address
+      # Step 4: Force Pinggy to create a clean TCP port address
       - name: Start Live GUI Stream
         run: |
           echo "=========================================================="
           echo "Generating your visual desktop connection details..."
           echo "=========================================================="
           
-          # Added "tcp" at the end to force raw numeric port output
           ssh -p 443 -R0:localhost:5900 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 tcp@a.pinggy.io
