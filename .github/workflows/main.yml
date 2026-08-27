@@ -1,43 +1,102 @@
-name: Free Mac Terminal Cloud
-on: 
-  workflow_dispatch: 
+name: Kali Desktop (xrdp + Tailscale, Drive-backed)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ts_authkey:
+        description: "Tailscale auth key (generate a one-time/ephemeral key at login.tailscale.com/admin/settings/keys)"
+        required: true
+      runtime_minutes:
+        description: "Session length in minutes (max 350)"
+        required: false
+        default: "350"
 
 jobs:
-  launch-terminal:
-    runs-on: macos-latest
+  kali-desktop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+
     steps:
-      # Step 1: Install and configure Ngrok using the secret you saved earlier
-      - name: Initialize Tunnel
-        run: |
-          brew install ngrok
-          ngrok config add-authtoken "${{ secrets.NGROK_AUTH_TOKEN }}"
+      - name: Install rclone
+        run: curl https://rclone.org/install.sh | sudo bash
 
-      # Step 2: Launch the web-accessible terminal panel
-      - name: Open Web Terminal
+      - name: Configure rclone from secret
         run: |
-          # Starts a lightweight web terminal engine on port 4242
-          sudo native-terminal-server --port 4242 &
+          mkdir -p ~/.config/rclone
+          echo "${{ secrets.RCLONE_CONFIG }}" > ~/.config/rclone/rclone.conf
+
+      - name: Restore previous session from Drive (if it exists)
+        run: |
+          mkdir -p /tmp/kali-restore
+          rclone copy gdrive:kali-backups/kali-home.tar.gz /tmp/kali-restore/ || echo "No previous backup found, starting fresh."
+
+      - name: Install Kali base + XFCE + xrdp
+        run: |
+          docker run -d --name kali --privileged \
+            -v /tmp/kali-restore:/mnt/restore \
+            kalilinux/kali-rolling sleep infinity
+          docker exec kali bash -c "
+            apt update &&
+            apt install -y kali-desktop-xfce xrdp dbus-x11 sudo curl xz-utils &&
+            adduser --disabled-password --gecos '' kaliuser &&
+            echo 'kaliuser ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers &&
+            echo 'kaliuser:${{ github.run_id }}' | chpasswd &&
+            echo xfce4-session > /home/kaliuser/.xsession &&
+            chown kaliuser:kaliuser /home/kaliuser/.xsession &&
+            service xrdp start
+          "
+
+      - name: Set random RDP password
+        id: genpass
+        run: |
+          PASS=$(openssl rand -hex 6)
+          docker exec kali bash -c "echo 'kaliuser:$PASS' | chpasswd"
+          echo "rdppass=$PASS" >> "$GITHUB_OUTPUT"
+
+      - name: Restore previous session data (if present)
+        run: |
+          if [ -f /tmp/kali-restore/kali-home.tar.gz ]; then
+            docker cp /tmp/kali-restore/kali-home.tar.gz kali:/tmp/restore.tar.gz
+            docker exec kali bash -c "tar xzf /tmp/restore.tar.gz -C / --overwrite"
+            echo "Previous session restored."
+          fi
+
+      - name: Install and start Tailscale inside container
+        run: |
+          docker exec kali bash -c "
+            curl -fsSL https://tailscale.com/install.sh | sh &&
+            tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/var/run/tailscale/tailscaled.sock &
+            sleep 3 &&
+            tailscale up --authkey=${{ inputs.ts_authkey }} --hostname=kali-action-$(date +%s) --accept-dns=true
+          "
           sleep 5
-          
-          # Fire up the Ngrok tunnel over HTTP
-          ngrok http 4242 --log=stdout &
-          sleep 10
+          docker exec kali tailscale ip -4
 
-      # Step 3: Automatically post the link as a comment notification
-      - name: Post Access URL
+      - name: Print connection details
         run: |
-          # Fetch the public link from Ngrok's local API panel
-          TERMINAL_URL=$(curl --silent http://127.0.0 | jq -r '.tunnels[0].public_url')
-          
-          # Post the link as a direct comment on the workflow run page
-          curl -L \
-            -X POST \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            https://github.com{{ github.repository }}/actions/runs/${{ github.run_id }}/comments \
-            -d "{\"body\":\"🚀 YOUR CLOUD MAC TERMINAL IS READY!\n\nClick here to open it: $TERMINAL_URL\"}"
+          IP=$(docker exec kali tailscale ip -4)
+          echo "=================================================="
+          echo "   KALI DESKTOP READY (via Tailscale + RDP)"
+          echo "=================================================="
+          echo "Connect using any RDP app (Windows App, Microsoft Remote Desktop, RD Client):"
+          echo "PC name / Server:  $IP"
+          echo "Username:          kaliuser"
+          echo "Password:          ${{ steps.genpass.outputs.rdppass }}"
+          echo "=================================================="
+          echo "Make sure Tailscale is running/connected on your"
+          echo "own device and signed into the SAME Tailscale account."
+          echo "=================================================="
 
-      # Step 4: Keep the server open for 6 hours
-      - name: Hold Session Open
+      - name: Keep session alive
         run: |
-          sleep 21600
+          MINS="${{ inputs.runtime_minutes }}"
+          if [ "$MINS" -gt 350 ]; then MINS=350; fi
+          sleep $((MINS * 60))
+
+      - name: Save session to Drive before ending
+        if: always()
+        run: |
+          docker exec kali tar czf /tmp/kali-home.tar.gz /home/kaliuser 2>/dev/null || true
+          docker cp kali:/tmp/kali-home.tar.gz /tmp/kali-home.tar.gz
+          rclone copy /tmp/kali-home.tar.gz gdrive:kali-backups/
+          echo "Backup saved to Google Drive: kali-backups/kali-home.tar.gz"
