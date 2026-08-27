@@ -1,4 +1,4 @@
-name: Kali Desktop (xrdp + Tailscale)
+name: Debian Desktop (GNOME, xrdp + Tailscale)
 
 on:
   workflow_dispatch:
@@ -12,21 +12,24 @@ on:
         default: "350"
 
 jobs:
-  kali-desktop:
+  debian-desktop:
     runs-on: ubuntu-latest
     timeout-minutes: 355
 
     steps:
-      - name: Install Kali base + XFCE + xrdp
+      - name: Install Debian base + GNOME + xrdp
         run: |
-          docker run -d --name kali --privileged kalilinux/kali-rolling sleep infinity
-          docker exec kali bash -c "
+          docker run -d --name debian --privileged debian:bookworm sleep infinity
+          docker exec debian bash -c "
             apt update &&
-            apt install -y kali-desktop-xfce xrdp dbus-x11 sudo curl xz-utils iproute2 &&
-            adduser --disabled-password --gecos '' kaliuser &&
-            echo 'kaliuser ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers &&
-            echo xfce4-session > /home/kaliuser/.xsession &&
-            chown kaliuser:kaliuser /home/kaliuser/.xsession &&
+            apt install -y task-gnome-desktop xrdp dbus-x11 sudo curl iproute2 gnome-terminal &&
+            adduser --disabled-password --gecos '' debuser &&
+            echo 'debuser ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers &&
+            echo 'dbus-launch --exit-with-session gnome-session' > /home/debuser/.xsession &&
+            chown debuser:debuser /home/debuser/.xsession &&
+            chmod +x /home/debuser/.xsession &&
+            sed -i 's/port=3389/port=3389\\nmax_bpp=32/' /etc/xrdp/xrdp.ini &&
+            service dbus start &&
             service xrdp start
           "
 
@@ -34,12 +37,12 @@ jobs:
         id: genpass
         run: |
           PASS=$(openssl rand -hex 6)
-          docker exec kali bash -c "echo 'kaliuser:$PASS' | chpasswd"
+          docker exec debian bash -c "echo 'debuser:$PASS' | chpasswd"
           echo "rdppass=$PASS" >> "$GITHUB_OUTPUT"
 
       - name: Install Tailscale static binary (no systemd needed)
         run: |
-          docker exec kali bash -c "
+          docker exec debian bash -c "
             curl -fsSL https://pkgs.tailscale.com/stable/tailscale_1.82.0_amd64.tgz -o /tmp/ts.tgz &&
             tar xzf /tmp/ts.tgz -C /tmp &&
             mv /tmp/tailscale_*_amd64/tailscale /usr/bin/ &&
@@ -49,26 +52,26 @@ jobs:
 
       - name: Start tailscaled directly + bring up Tailscale
         run: |
-          docker exec -d kali /usr/sbin/tailscaled \
+          docker exec -d debian /usr/sbin/tailscaled \
             --state=/var/lib/tailscale/tailscaled.state \
             --socket=/var/run/tailscale/tailscaled.sock
           sleep 4
-          docker exec kali tailscale up \
+          docker exec debian tailscale up \
             --authkey="${{ inputs.ts_authkey }}" \
-            --hostname="kali-action-${{ github.run_id }}" \
+            --hostname="debian-action-${{ github.run_id }}" \
             --accept-dns=true
           sleep 3
-          docker exec kali tailscale ip -4
+          docker exec debian tailscale ip -4
 
       - name: Print connection details
         run: |
-          IP=$(docker exec kali tailscale ip -4)
+          IP=$(docker exec debian tailscale ip -4)
           echo "=================================================="
-          echo "   KALI DESKTOP READY (via Tailscale + RDP)"
+          echo "   DEBIAN + GNOME DESKTOP READY (via Tailscale + RDP)"
           echo "=================================================="
           echo "Connect using any RDP app (Windows App, Microsoft Remote Desktop, RD Client):"
           echo "PC name / Server:  $IP"
-          echo "Username:          kaliuser"
+          echo "Username:          debuser"
           echo "Password:          ${{ steps.genpass.outputs.rdppass }}"
           echo "=================================================="
           echo "Make sure Tailscale is running/connected on your"
