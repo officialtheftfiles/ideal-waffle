@@ -1,4 +1,4 @@
-name: macOS Terminal (SSH + Tailscale)
+name: Debian Desktop (GNOME, xrdp + Tailscale)
 
 on:
   workflow_dispatch:
@@ -12,52 +12,70 @@ on:
         default: "350"
 
 jobs:
-  macos-terminal:
-    runs-on: macos-latest
+  debian-desktop:
+    runs-on: ubuntu-latest
     timeout-minutes: 355
 
     steps:
-      - name: Create user + set password
+      - name: Install Debian base + GNOME + xrdp
+        run: |
+          docker run -d --name debian --privileged debian:bookworm sleep infinity
+          docker exec debian bash -c "
+            apt update &&
+            apt install -y task-gnome-desktop xrdp dbus-x11 sudo curl iproute2 gnome-terminal &&
+            adduser --disabled-password --gecos '' debuser &&
+            echo 'debuser ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers &&
+            echo 'dbus-launch --exit-with-session gnome-session' > /home/debuser/.xsession &&
+            chown debuser:debuser /home/debuser/.xsession &&
+            chmod +x /home/debuser/.xsession &&
+            sed -i 's/port=3389/port=3389\\nmax_bpp=32/' /etc/xrdp/xrdp.ini &&
+            service dbus start &&
+            service xrdp start
+          "
+
+      - name: Set random RDP password
         id: genpass
         run: |
           PASS=$(openssl rand -hex 6)
-          echo "sshpass=$PASS" >> "$GITHUB_OUTPUT"
-          if ! id bulletuser &>/dev/null; then
-            sudo sysadminctl -addUser bulletuser -fullName "Bullet User" -password "$PASS" -admin
-          else
-            echo "$PASS" | sudo dscl . -passwd /Users/bulletuser
-          fi
+          docker exec debian bash -c "echo 'debuser:$PASS' | chpasswd"
+          echo "rdppass=$PASS" >> "$GITHUB_OUTPUT"
 
-      - name: Enable Remote Login (SSH)
+      - name: Install Tailscale static binary (no systemd needed)
         run: |
-          sudo systemsetup -setremotelogin on
-          sudo dscl . -append /Groups/com.apple.access_ssh GroupMembership bulletuser
+          docker exec debian bash -c "
+            curl -fsSL https://pkgs.tailscale.com/stable/tailscale_1.82.0_amd64.tgz -o /tmp/ts.tgz &&
+            tar xzf /tmp/ts.tgz -C /tmp &&
+            mv /tmp/tailscale_*_amd64/tailscale /usr/bin/ &&
+            mv /tmp/tailscale_*_amd64/tailscaled /usr/sbin/ &&
+            mkdir -p /var/lib/tailscale /var/run/tailscale
+          "
 
-      - name: Install Tailscale via Homebrew
+      - name: Start tailscaled directly + bring up Tailscale
         run: |
-          brew install tailscale
-          sudo brew services start tailscale
-          sleep 3
-
-      - name: Bring up Tailscale
-        run: |
-          sudo tailscale up \
+          docker exec -d debian /usr/sbin/tailscaled \
+            --state=/var/lib/tailscale/tailscaled.state \
+            --socket=/var/run/tailscale/tailscaled.sock
+          sleep 4
+          docker exec debian tailscale up \
             --authkey="${{ inputs.ts_authkey }}" \
-            --hostname="macos-action-${{ github.run_id }}" \
+            --hostname="debian-action-${{ github.run_id }}" \
             --accept-dns=true
           sleep 3
-          tailscale ip -4
+          docker exec debian tailscale ip -4
 
       - name: Print connection details
         run: |
-          IP=$(tailscale ip -4)
+          IP=$(docker exec debian tailscale ip -4)
           echo "=================================================="
-          echo "   macOS TERMINAL READY (via Tailscale + SSH)"
+          echo "   DEBIAN + GNOME DESKTOP READY (via Tailscale + RDP)"
           echo "=================================================="
-          echo "ssh bulletuser@$IP"
-          echo ""
-          echo "Username:  bulletuser"
-          echo "Password:  ${{ steps.genpass.outputs.sshpass }}"
+          echo "Connect using any RDP app (Windows App, Microsoft Remote Desktop, RD Client):"
+          echo "PC name / Server:  $IP"
+          echo "Username:          debuser"
+          echo "Password:          ${{ steps.genpass.outputs.rdppass }}"
+          echo "=================================================="
+          echo "Make sure Tailscale is running/connected on your"
+          echo "own device and signed into the SAME Tailscale account."
           echo "=================================================="
 
       - name: Keep session alive
