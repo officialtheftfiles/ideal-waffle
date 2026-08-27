@@ -1,0 +1,85 @@
+name: Debian Desktop (GNOME, xrdp + Tailscale)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ts_authkey:
+        description: "Tailscale auth key (generate a one-time/ephemeral key at login.tailscale.com/admin/settings/keys)"
+        required: true
+      runtime_minutes:
+        description: "Session length in minutes (max 350)"
+        required: false
+        default: "350"
+
+jobs:
+  debian-desktop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+
+    steps:
+      - name: Install Debian base + GNOME + xrdp
+        run: |
+          docker run -d --name debian --privileged debian:bookworm sleep infinity
+          docker exec debian bash -c "
+            apt update &&
+            apt install -y task-gnome-desktop xrdp dbus-x11 sudo curl iproute2 gnome-terminal &&
+            adduser --disabled-password --gecos '' debuser &&
+            echo 'debuser ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers &&
+            echo 'dbus-launch --exit-with-session gnome-session' > /home/debuser/.xsession &&
+            chown debuser:debuser /home/debuser/.xsession &&
+            chmod +x /home/debuser/.xsession &&
+            sed -i 's/port=3389/port=3389\\nmax_bpp=32/' /etc/xrdp/xrdp.ini &&
+            service dbus start &&
+            service xrdp start
+          "
+
+      - name: Set random RDP password
+        id: genpass
+        run: |
+          PASS=$(openssl rand -hex 6)
+          docker exec debian bash -c "echo 'debuser:$PASS' | chpasswd"
+          echo "rdppass=$PASS" >> "$GITHUB_OUTPUT"
+
+      - name: Install Tailscale static binary (no systemd needed)
+        run: |
+          docker exec debian bash -c "
+            curl -fsSL https://pkgs.tailscale.com/stable/tailscale_1.82.0_amd64.tgz -o /tmp/ts.tgz &&
+            tar xzf /tmp/ts.tgz -C /tmp &&
+            mv /tmp/tailscale_*_amd64/tailscale /usr/bin/ &&
+            mv /tmp/tailscale_*_amd64/tailscaled /usr/sbin/ &&
+            mkdir -p /var/lib/tailscale /var/run/tailscale
+          "
+
+      - name: Start tailscaled directly + bring up Tailscale
+        run: |
+          docker exec -d debian /usr/sbin/tailscaled \
+            --state=/var/lib/tailscale/tailscaled.state \
+            --socket=/var/run/tailscale/tailscaled.sock
+          sleep 4
+          docker exec debian tailscale up \
+            --authkey="${{ inputs.ts_authkey }}" \
+            --hostname="debian-action-${{ github.run_id }}" \
+            --accept-dns=true
+          sleep 3
+          docker exec debian tailscale ip -4
+
+      - name: Print connection details
+        run: |
+          IP=$(docker exec debian tailscale ip -4)
+          echo "=================================================="
+          echo "   DEBIAN + GNOME DESKTOP READY (via Tailscale + RDP)"
+          echo "=================================================="
+          echo "Connect using any RDP app (Windows App, Microsoft Remote Desktop, RD Client):"
+          echo "PC name / Server:  $IP"
+          echo "Username:          debuser"
+          echo "Password:          ${{ steps.genpass.outputs.rdppass }}"
+          echo "=================================================="
+          echo "Make sure Tailscale is running/connected on your"
+          echo "own device and signed into the SAME Tailscale account."
+          echo "=================================================="
+
+      - name: Keep session alive
+        run: |
+          MINS="${{ inputs.runtime_minutes }}"
+          if [ "$MINS" -gt 350 ]; then MINS=350; fi
+          sleep $((MINS * 60))
