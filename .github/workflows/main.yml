@@ -17,18 +17,11 @@ jobs:
     timeout-minutes: 355
 
     steps:
-      - name: Set random SSH password
+      - name: Create user + set password
         id: genpass
         run: |
           PASS=$(openssl rand -hex 6)
           echo "sshpass=$PASS" >> "$GITHUB_OUTPUT"
-          echo "$PASS" | sudo -S true 2>/dev/null || true
-          sudo sysadminctl -addUser bulletuser -password "$PASS" -admin 2>&1 || \
-          dscl . -create /Users/bulletuser 2>&1 || true
-
-      - name: Create user + set password (fallback method)
-        run: |
-          PASS="${{ steps.genpass.outputs.sshpass }}"
           if ! id bulletuser &>/dev/null; then
             sudo sysadminctl -addUser bulletuser -fullName "Bullet User" -password "$PASS" -admin
           else
@@ -40,11 +33,10 @@ jobs:
           sudo systemsetup -setremotelogin on
           sudo dscl . -append /Groups/com.apple.access_ssh GroupMembership bulletuser
 
-      - name: Install Tailscale
+      - name: Install Tailscale via Homebrew
         run: |
-          curl -fsSL https://pkgs.tailscale.com/stable/tailscale_latest_macos.pkg -o /tmp/ts.pkg
-          sudo installer -pkg /tmp/ts.pkg -target /
-          sudo tailscaled install-system-daemon
+          brew install tailscale
+          sudo brew services start tailscale
           sleep 3
 
       - name: Bring up Tailscale
@@ -62,16 +54,10 @@ jobs:
           echo "=================================================="
           echo "   macOS TERMINAL READY (via Tailscale + SSH)"
           echo "=================================================="
-          echo "Connect using any SSH app (Termux, JuiceSSH, Terminus,"
-          echo "or ssh in any terminal):"
-          echo ""
-          echo "  ssh bulletuser@$IP"
+          echo "ssh bulletuser@$IP"
           echo ""
           echo "Username:  bulletuser"
           echo "Password:  ${{ steps.genpass.outputs.sshpass }}"
-          echo "=================================================="
-          echo "Make sure Tailscale is running/connected on your"
-          echo "own device and signed into the SAME Tailscale account."
           echo "=================================================="
 
       - name: Keep session alive
