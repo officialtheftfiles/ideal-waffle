@@ -1,4 +1,4 @@
-name: Kali Desktop (xrdp + Tailscale, Drive-backed)
+name: Kali Desktop (xrdp + Tailscale)
 
 on:
   workflow_dispatch:
@@ -17,30 +17,14 @@ jobs:
     timeout-minutes: 355
 
     steps:
-      - name: Install rclone
-        run: curl https://rclone.org/install.sh | sudo bash
-
-      - name: Configure rclone from secret
-        run: |
-          mkdir -p ~/.config/rclone
-          echo "${{ secrets.RCLONE_CONFIG }}" > ~/.config/rclone/rclone.conf
-
-      - name: Restore previous session from Drive (if it exists)
-        run: |
-          mkdir -p /tmp/kali-restore
-          rclone copy gdrive:kali-backups/kali-home.tar.gz /tmp/kali-restore/ || echo "No previous backup found, starting fresh."
-
       - name: Install Kali base + XFCE + xrdp
         run: |
-          docker run -d --name kali --privileged \
-            -v /tmp/kali-restore:/mnt/restore \
-            kalilinux/kali-rolling sleep infinity
+          docker run -d --name kali --privileged kalilinux/kali-rolling sleep infinity
           docker exec kali bash -c "
             apt update &&
-            apt install -y kali-desktop-xfce xrdp dbus-x11 sudo curl xz-utils &&
+            apt install -y kali-desktop-xfce xrdp dbus-x11 sudo curl xz-utils iproute2 &&
             adduser --disabled-password --gecos '' kaliuser &&
             echo 'kaliuser ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers &&
-            echo 'kaliuser:${{ github.run_id }}' | chpasswd &&
             echo xfce4-session > /home/kaliuser/.xsession &&
             chown kaliuser:kaliuser /home/kaliuser/.xsession &&
             service xrdp start
@@ -53,23 +37,27 @@ jobs:
           docker exec kali bash -c "echo 'kaliuser:$PASS' | chpasswd"
           echo "rdppass=$PASS" >> "$GITHUB_OUTPUT"
 
-      - name: Restore previous session data (if present)
-        run: |
-          if [ -f /tmp/kali-restore/kali-home.tar.gz ]; then
-            docker cp /tmp/kali-restore/kali-home.tar.gz kali:/tmp/restore.tar.gz
-            docker exec kali bash -c "tar xzf /tmp/restore.tar.gz -C / --overwrite"
-            echo "Previous session restored."
-          fi
-
-      - name: Install and start Tailscale inside container
+      - name: Install Tailscale static binary (no systemd needed)
         run: |
           docker exec kali bash -c "
-            curl -fsSL https://tailscale.com/install.sh | sh &&
-            tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/var/run/tailscale/tailscaled.sock &
-            sleep 3 &&
-            tailscale up --authkey=${{ inputs.ts_authkey }} --hostname=kali-action-$(date +%s) --accept-dns=true
+            curl -fsSL https://pkgs.tailscale.com/stable/tailscale_1.82.0_amd64.tgz -o /tmp/ts.tgz &&
+            tar xzf /tmp/ts.tgz -C /tmp &&
+            mv /tmp/tailscale_*_amd64/tailscale /usr/bin/ &&
+            mv /tmp/tailscale_*_amd64/tailscaled /usr/sbin/ &&
+            mkdir -p /var/lib/tailscale /var/run/tailscale
           "
-          sleep 5
+
+      - name: Start tailscaled directly + bring up Tailscale
+        run: |
+          docker exec -d kali /usr/sbin/tailscaled \
+            --state=/var/lib/tailscale/tailscaled.state \
+            --socket=/var/run/tailscale/tailscaled.sock
+          sleep 4
+          docker exec kali tailscale up \
+            --authkey="${{ inputs.ts_authkey }}" \
+            --hostname="kali-action-${{ github.run_id }}" \
+            --accept-dns=true
+          sleep 3
           docker exec kali tailscale ip -4
 
       - name: Print connection details
@@ -92,11 +80,3 @@ jobs:
           MINS="${{ inputs.runtime_minutes }}"
           if [ "$MINS" -gt 350 ]; then MINS=350; fi
           sleep $((MINS * 60))
-
-      - name: Save session to Drive before ending
-        if: always()
-        run: |
-          docker exec kali tar czf /tmp/kali-home.tar.gz /home/kaliuser 2>/dev/null || true
-          docker cp kali:/tmp/kali-home.tar.gz /tmp/kali-home.tar.gz
-          rclone copy /tmp/kali-home.tar.gz gdrive:kali-backups/
-          echo "Backup saved to Google Drive: kali-backups/kali-home.tar.gz"
