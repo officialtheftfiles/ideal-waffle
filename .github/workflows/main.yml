@@ -45,7 +45,9 @@ jobs:
       - name: Configure rclone for saprow
         run: |
           sudo mkdir -p /home/saprow/.config/rclone
-          echo "${{ secrets.RCLONE_CONFIG }}" | sudo tee /home/saprow/.config/rclone/rclone.conf > /dev/null
+          sudo tee /home/saprow/.config/rclone/rclone.conf > /dev/null << 'RCLONE_EOF'
+          ${{ secrets.RCLONE_CONFIG }}
+          RCLONE_EOF
           sudo chown -R saprow:saprow /home/saprow/.config
 
       - name: Install and connect Tailscale
