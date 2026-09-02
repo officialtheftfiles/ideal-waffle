@@ -1,10 +1,10 @@
-name: macOS Terminal (SSH + Tailscale)
+name: Remote VM (Linux)
 
 on:
   workflow_dispatch:
     inputs:
       ts_authkey:
-        description: "Tailscale auth key (generate a one-time/ephemeral key at login.tailscale.com/admin/settings/keys)"
+        description: "Tailscale auth key"
         required: true
       runtime_minutes:
         description: "Session length in minutes (max 350)"
@@ -12,56 +12,122 @@ on:
         default: "350"
 
 jobs:
-  macos-terminal:
-    runs-on: macos-latest
+  vm:
+    runs-on: ubuntu-latest
     timeout-minutes: 355
 
     steps:
-      - name: Create user + set password
-        id: genpass
+      - name: Install base tools
         run: |
-          PASS=$(openssl rand -hex 6)
-          echo "sshpass=$PASS" >> "$GITHUB_OUTPUT"
-          if ! id bulletuser &>/dev/null; then
-            sudo sysadminctl -addUser bulletuser -fullName "Bullet User" -password "$PASS" -admin
+          sudo apt-get update
+          sudo apt-get install -y zstd curl unzip
+
+      - name: Install rclone
+        run: |
+          curl https://rclone.org/install.sh | sudo bash
+
+      - name: Create default user
+        run: |
+          sudo useradd -m -s /bin/bash saprow
+          sudo usermod -aG sudo saprow
+          echo "saprow ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/saprow
+
+          sudo mkdir -p /home/saprow/.ssh
+          echo "${{ secrets.SSH_PUBLIC_KEY }}" | sudo tee /home/saprow/.ssh/authorized_keys
+          sudo chown -R saprow:saprow /home/saprow/.ssh
+          sudo chmod 700 /home/saprow/.ssh
+          sudo chmod 600 /home/saprow/.ssh/authorized_keys
+
+      - name: Set user password
+        run: |
+          echo "saprow:${{ secrets.SAPROW_PASSWORD }}" | sudo chpasswd
+
+      - name: Configure rclone for saprow
+        run: |
+          sudo mkdir -p /home/saprow/.config/rclone
+          echo "${{ secrets.RCLONE_CONFIG }}" | sudo tee /home/saprow/.config/rclone/rclone.conf > /dev/null
+          sudo chown -R saprow:saprow /home/saprow/.config
+
+      - name: Install and connect Tailscale
+        run: |
+          curl -fsSL https://tailscale.com/install.sh | sh
+          sudo tailscale up --authkey "${{ inputs.ts_authkey }}" --hostname "saprow-linux" --accept-dns=true
+
+      - name: Enable SSH
+        run: |
+          sudo systemctl enable --now ssh
+
+      - name: Find latest backup
+        id: check_backup
+        run: |
+          LAST=$(sudo -u saprow rclone lsf gdrive:vm-backups/ --include "backup_*.tar.zst" 2>/dev/null | \
+            sed -E "s/backup_([0-9]+)\.tar\.zst/\1/" | sort -n | tail -1)
+          if [ -z "$LAST" ]; then
+            echo "found=false" >> "$GITHUB_OUTPUT"
           else
-            echo "$PASS" | sudo dscl . -passwd /Users/bulletuser
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "num=$LAST" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Enable Remote Login (SSH)
+      - name: Restore latest backup
+        if: steps.check_backup.outputs.found == 'true'
         run: |
-          sudo systemsetup -setremotelogin on
-          sudo dscl . -append /Groups/com.apple.access_ssh GroupMembership bulletuser
+          NUM=$(printf "%02d" "${{ steps.check_backup.outputs.num }}")
+          echo "Restoring backup_${NUM}..."
+          sudo -u saprow bash -c "
+            rclone copy gdrive:vm-backups/backup_${NUM}.tar.zst ~/restore.tar.zst
+            rclone copy gdrive:vm-backups/packages_${NUM}.txt ~/packages.txt
+            tar --use-compress-program=zstd -xf ~/restore.tar.zst -C ~
+          "
+          if [ -f /home/saprow/packages.txt ]; then
+            sudo apt-get update
+            xargs sudo apt-get install -y < /home/saprow/packages.txt
+          fi
+          if [ -d /home/saprow/Downloads ]; then
+            for deb in /home/saprow/Downloads/*.deb; do
+              [ -e "$deb" ] && sudo dpkg -i "$deb"
+            done
+            sudo apt-get install -f -y
+          fi
 
-      - name: Install Tailscale via Homebrew
+      - name: Show connection info
         run: |
-          brew install tailscale
-          sudo brew services start tailscale
-          sleep 3
-
-      - name: Bring up Tailscale
-        run: |
-          sudo tailscale up \
-            --authkey="${{ inputs.ts_authkey }}" \
-            --hostname="macos-action-${{ github.run_id }}" \
-            --accept-dns=true
-          sleep 3
-          tailscale ip -4
-
-      - name: Print connection details
-        run: |
+          echo "Backup found: ${{ steps.check_backup.outputs.found }}"
           IP=$(tailscale ip -4)
           echo "=================================================="
-          echo "   macOS TERMINAL READY (via Tailscale + SSH)"
-          echo "=================================================="
-          echo "ssh bulletuser@$IP"
-          echo ""
-          echo "Username:  bulletuser"
-          echo "Password:  ${{ steps.genpass.outputs.sshpass }}"
+          echo "  VM READY — Tailscale IP: $IP"
+          echo "  SSH: ssh saprow@$IP"
           echo "=================================================="
 
-      - name: Keep session alive
+      - name: Work session — auto-backup fires at hour 5
         run: |
-          MINS="${{ inputs.runtime_minutes }}"
-          if [ "$MINS" -gt 350 ]; then MINS=350; fi
-          sleep $((MINS * 60))
+          TOTAL_MIN="${{ inputs.runtime_minutes }}"
+          if [ "$TOTAL_MIN" -gt 350 ]; then TOTAL_MIN=350; fi
+          BACKUP_AT=300
+          ELAPSED=0
+          while [ "$ELAPSED" -lt "$TOTAL_MIN" ]; do
+            if [ "$ELAPSED" -eq "$BACKUP_AT" ]; then
+              echo "Hour 5 reached — running automatic backup..."
+              sudo -u saprow bash -c '
+                cd ~
+                sudo apt-mark showmanual > ~/packages.txt
+
+                LAST=$(rclone lsf gdrive:vm-backups/ --include "backup_*.tar.zst" | \
+                  sed -E "s/backup_([0-9]+)\.tar\.zst/\1/" | sort -n | tail -1)
+                if [ -z "$LAST" ]; then NEXT=1; else NEXT=$((10#$LAST + 1)); fi
+                NUM=$(printf "%02d" "$NEXT")
+
+                tar --use-compress-program=zstd -cf "backup_${NUM}.tar.zst" \
+                  --exclude="**/cache" --exclude="**/Cache" --exclude="**/node_modules" \
+                  Documents Downloads Desktop Pictures .config .local/share 2>/dev/null
+
+                rclone copy "backup_${NUM}.tar.zst" gdrive:vm-backups/
+                rclone copy ~/packages.txt "gdrive:vm-backups/packages_${NUM}.txt"
+
+                echo "Uploaded backup_${NUM}.tar.zst and packages_${NUM}.txt"
+              '
+              echo "Automatic backup complete."
+            fi
+            sleep 60
+            ELAPSED=$((ELAPSED + 1))
+          done
